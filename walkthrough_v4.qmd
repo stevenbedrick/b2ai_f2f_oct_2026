@@ -8,8 +8,9 @@ format:
     output-file: walkthrough_single_page_v4.0.html
 ---
 
-```{r, include=FALSE}
+```{r setup, include=FALSE}
 set.seed(42)
+knitr::opts_chunk$set(dev = "ragg_png") # avoids relying on macOS's quartz/WindowServer backend
 library(tidyverse)
 library(gt)
 library(gtsummary)
@@ -20,7 +21,7 @@ PATH_TO_PHYSIONET_DOWNLOAD_DIR <- "/Users/bedricks/Documents/b2ai_4.0/adult/"
 PHENOTYPES_DIR <- fs::path_join(c(PATH_TO_PHYSIONET_DOWNLOAD_DIR, "phenotype"))
 FEATURES_DIR <- fs::path_join(c(PATH_TO_PHYSIONET_DOWNLOAD_DIR, "features"))
 
-full.data.dictionary <- read_csv("bridge2ai_voice_project_data_dictionary.csv")
+full.data.dictionary <- read_csv("bridge2ai_voice_redcap_project_data_dictionary.csv")
 
 ```
 
@@ -60,7 +61,7 @@ Two primary sets of files:
 
 Begin by reading in the demographics files...
 
-```{r, eval=TRUE,echo=TRUE,message=FALSE,warning=FALSE}
+```{r load-demographics, eval=TRUE,echo=TRUE,message=FALSE,warning=FALSE}
 demographics <- read_tsv(
   fs::path_join(c(
     PHENOTYPES_DIR, "demographics", "demographics.tsv")), col_types=cols(participant_id=col_character())) %>% 
@@ -76,14 +77,14 @@ What did we get?
 
 ::: {.fragment}
 
-```{r,echo=TRUE}
+```{r demographics-nrow, echo=TRUE}
 demographics |> nrow()
 ```
 ::: 
 
 ::: {.fragment}
 
-```{r,echo=TRUE}
+```{r demographics-ncol, echo=TRUE}
 demographics |> ncol()
 ```
 
@@ -99,14 +100,14 @@ What are in those columns?
 
 ::: {.fragment}
 
-```{r, echo=TRUE, eval=FALSE}
+```{r demographics-colnames-display, echo=TRUE, eval=FALSE}
 demographics |> colnames() |> sample(size=10)
 ```
 
 ::: 
 
 ::: {.fragment}
-```{r}
+```{r demographics-colnames-sample}
 demographics |> colnames() |> sample(size=10)
 ```
 :::
@@ -133,7 +134,7 @@ Hint: Look for fields whose `Form Name` is `q_generic_demographics`
 
 ::: {.fragment}
 
-```{r}
+```{r data-dictionary-sample}
 full.data.dictionary %>% filter(`Form Name`=='q_generic_demographics') %>% 
   select(`Variable / Field Name`, `Field Label`) %>% 
   sample_n(10) %>% gt
@@ -212,9 +213,66 @@ Other things to think about:
 
 :::
 
+## Data Tidying: A Repeated-Measures Gotcha {.smaller}
+
+::: {.fragment}
+`demographics.tsv` isn't quite one row per participant...
+:::
+
+::: {.fragment}
+```{r demographics-dup-count, echo=TRUE}
+demographics %>% count(participant_id) %>% filter(n>1) %>% nrow()
+```
+:::
+
+::: {.fragment}
+Some participants completed the demographics questionnaire more than once (see `demographics_session_id`) — e.g. at a follow-up visit.
+:::
+
+## Data Tidying: A Repeated-Measures Gotcha {.smaller}
+
+::: {.fragment}
+Usually harmless... but not always:
+
+```{r demographics-dup-conflicts, echo=TRUE}
+demographics %>% 
+  group_by(participant_id) %>% 
+  summarize(n_sex=n_distinct(sex_at_birth), n_age=n_distinct(age)) %>% 
+  filter(n_sex>1 | n_age>1) %>% nrow()
+```
+:::
+
+::: {.fragment}
+For a handful of participants, `sex_at_birth` actually _disagrees_ across sessions — this looks like a data entry bug, not a legitimate change over time!
+:::
+
+::: {.callout-warning .fragment}
+Naively joining on `participant_id` alone can silently duplicate or scramble rows downstream!
+:::
+
+## Data Tidying: A Repeated-Measures Gotcha {.smaller}
+
+::: {.fragment}
+For today, we'll resolve this by keeping each participant's _most recent_ session:
+
+```{r demographics-dedup-fix, echo=TRUE}
+demographics <- demographics %>% 
+  mutate(.session_rank = replace_na(as.numeric(demographics_session_id), 0)) %>% 
+  arrange(participant_id, .session_rank) %>% 
+  group_by(participant_id) %>% 
+  slice_tail(n = 1) %>% 
+  ungroup() %>% 
+  select(-.session_rank)
+```
+:::
+
+::: {.fragment}
+This is a judgment call — in a real analysis, you'd want to dig into _why_ these conflicts exist!
+:::
+
 ## Meet Our Participants {.smaller}
 
-```{r, echo=TRUE, message=FALSE, warning=FALSE}
+```{r meet-participants-summary, echo=TRUE, message=FALSE, warning=FALSE}
 demographics %>% 
   select(participant_id, sex_at_birth, age) %>% 
   distinct() %>% # one row per session, repeated per participant
@@ -224,6 +282,7 @@ demographics %>%
 
 ```
 
+## What's in our Toolbox?
 
 ::: {.fragment}
 
@@ -288,7 +347,7 @@ Starting with _self-reported status...
 
 Self-reported conditions live in `phenotype/enrollment/eligibility.tsv`:
 
-```{r,echo=TRUE, message=FALSE}
+```{r load-eligibility, echo=TRUE, message=FALSE}
 eligibility.table <- read_tsv(fs::path_join(c(
     PHENOTYPES_DIR, "enrollment", "eligibility.tsv")))
 ```
@@ -311,7 +370,7 @@ This table contains two types of information:
 
 Columns starting with `self_reported_*` indicate participant-level status:
 
-```{r}
+```{r self-reported-tally}
 eligibility.table %>% select(participant_id, self_reported_airway_stenosis) %>% 
   group_by(self_reported_airway_stenosis) %>% tally()
 ```
@@ -366,7 +425,7 @@ But first, let's talk about **controls**...
 ::: {.fragment}
 One way to find controls: use the `is_control_participant` column:
 
-```{r,echo=TRUE}
+```{r is-control-tally, echo=TRUE}
 eligibility.table %>% count(is_control_participant)
 ```
 
@@ -397,7 +456,7 @@ Even among `is_control_participant` participants, there is heterogeneity:
 :::
 
 ::: {.fragment}
-```{r, echo=FALSE}
+```{r control-heterogeneity-table, echo=FALSE}
 eligibility.table %>% filter(is_control_participant=="Yes") %>% pivot_longer(starts_with("self_reported"), names_to="condition", values_to="response") %>% 
   group_by(condition, response) %>% tally() %>% pivot_wider(names_from=response, values_from=n) %>% ungroup %>% gt
 ```
@@ -410,11 +469,27 @@ Moving on...
 
 ## Cases vs. Controls  {.smaller}
 
+::: {.callout-warning .fragment}
+Our `is_control_participant=='Yes'` pool is agnostic to study site, diagnostic group, etc.
+:::
+
+::: {.fragment}
+If cases and controls were recruited under different circumstances (sites, equipment, populations)... that's a potential confounder!
+:::
+
+::: {.fragment}
+`phenotype/enrollment/participant.tsv` has a `site` column that (in a real analysis) we might use to diagnose this...
+:::
+
+## Cases vs. Controls  {.smaller}
+
 Diagnoses each have separate TSVs...
 
 ::: {.fragment}
 But how do we know which one we want?
 :::
+
+## Cases vs. Controls  {.smaller}
 
 ::: {.fragment}
 ![](figures/screenshots/screenshot_1.png)
@@ -448,7 +523,7 @@ But how do we know which one we want?
 ## Cases vs. Controls  {.smaller}
 
 ::: {.fragment}
-```{r, echo=TRUE,message=FALSE}
+```{r load-airway-stenosis-dx, echo=TRUE, message=FALSE}
 airway.stenosis.dx <- read_tsv(
   fs::path_join(c(PHENOTYPES_DIR, "diagnosis", "airway_stenosis.tsv"))
 )
@@ -457,7 +532,7 @@ airway.stenosis.dx <- read_tsv(
 :::
 
 ::: {.fragment}
-```{r,echo=TRUE}
+```{r glimpse-airway-stenosis-dx, echo=TRUE}
 glimpse(airway.stenosis.dx)
 ```
 
@@ -505,7 +580,7 @@ Step 1: Find cases
 ::: 
 
 ::: {.fragment}
-```{r, echo=TRUE}
+```{r cohort-find-cases, echo=TRUE}
 airway.stenosis.cases <- airway.stenosis.dx %>% 
   filter(diagnosis_as_gold_standard_diagnosis=='Yes')
 ```
@@ -517,7 +592,7 @@ Step 2: Identify controls
 :::
 
 ::: {.fragment}
-```{r, echo=TRUE}
+```{r cohort-find-controls, echo=TRUE}
 airway.stenosis.controls <- eligibility.table %>% 
   filter(is_control_participant=='Yes') %>% 
   filter(self_reported_airway_stenosis=="Unchecked") # belt-and-suspenders
@@ -529,7 +604,7 @@ Step 3: Do some tidying
 :::
 
 ::: {.fragment}
-```{r, echo=TRUE}
+```{r cohort-tidy-case-control, echo=TRUE}
 airway.stenosis.cases <- airway.stenosis.cases %>% 
   select(participant_id) %>% 
   mutate(status='case')
@@ -544,7 +619,7 @@ airway.stenosis.controls <- airway.stenosis.controls %>%
 
 ::: {.fragment}
 Step 4: Combine!
-```{r, echo=TRUE}
+```{r cohort-combine, echo=TRUE}
 airway.stenosis.cohort <- airway.stenosis.cases %>% rbind(airway.stenosis.controls)
 ```
 :::
@@ -554,7 +629,7 @@ Always do a sanity check:
 :::
 
 ::: {.fragment}
-```{r, echo=TRUE}
+```{r cohort-sanity-check, echo=TRUE}
 airway.stenosis.cohort %>% count(status)
 ```
 ::: 
@@ -575,12 +650,12 @@ Let's do some quick EDA with our new cohort:
 
 ::: {.column width="50%" .fragment}
 
-```{r}
+```{r eda-join-demographics}
 stenosis.for.eda <- airway.stenosis.cohort |> 
   inner_join(demographics, by='participant_id') |> 
   select(participant_id, status, age, sex_at_birth) |> distinct()
 ```
-```{r,message=FALSE,warning=FALSE}
+```{r eda-summary-table, message=FALSE, warning=FALSE}
 stenosis.for.eda |> tbl_summary(by=status, include=c(age,sex_at_birth)) |> add_p()
 ```
 
@@ -588,7 +663,7 @@ stenosis.for.eda |> tbl_summary(by=status, include=c(age,sex_at_birth)) |> add_p
 
 ::: {.column width="50%" .fragment}
 
-```{r, warning=FALSE,message=FALSE}
+```{r eda-age-boxplot, warning=FALSE, message=FALSE}
 stenosis.for.eda %>% ggplot(aes(x=status,y=age,fill=sex_at_birth))+ geom_boxplot() +
   geom_jitter(alpha=0.25,  position=position_jitterdodge(jitter.width=0.2)) +
   theme_minimal()
@@ -608,7 +683,7 @@ What do we notice about our cohort?
 
 For _this_ analysis, we will exclude participants where `sex_at_birth` is `Unknown`:
 
-```{r}
+```{r final-cleanup-filter-unknown-sex}
 airway.stenosis.cohort <- airway.stenosis.cohort %>% 
   inner_join(demographics, by='participant_id') |> 
   filter(sex_at_birth != "Unknown") %>% 
@@ -641,7 +716,7 @@ We now need to identify an acoustic task of interest, to use as a sample.
 ::: {.fragment}
 
 Let's use the `static_features` dataframe to see what our options are:
-```{r,message=FALSE,warning=FALSE}
+```{r load-static-features, message=FALSE, warning=FALSE}
 static_features.raw <- read_tsv(fs::path_join(c(FEATURES_DIR, "static_features.tsv")))
 ```
 
@@ -650,7 +725,7 @@ static_features.raw <- read_tsv(fs::path_join(c(FEATURES_DIR, "static_features.t
 
 ::: {.fragment}
 
-```{r,echo=TRUE,eval=FALSE}
+```{r task-distribution-display, echo=TRUE, eval=FALSE}
 airway.stenosis.cohort |> 
    # multiple sessions per participant
   inner_join(static_features.raw, by='participant_id', relationship = "many-to-many") |>
@@ -662,7 +737,7 @@ airway.stenosis.cohort |>
 
 ## Returning to our RQ... {.smaller .scrollable}
 
-```{r}
+```{r task-distribution-table}
 airway.stenosis.cohort |> 
   inner_join(static_features.raw, by='participant_id', relationship = "many-to-many") |>  # multiple sessions
   select(participant_id, status, task_name) |> 
@@ -697,7 +772,7 @@ Let's pick the "Prolonged Vowel" acoustic task.
 A simple `inner_join`/`filter` will do the trick:
 
 ::: {.fragment}
-```{r,echo=TRUE, warning=FALSE}
+```{r assemble-feature-matrix, echo=TRUE, warning=FALSE}
 stenosis.cohort.features <- airway.stenosis.cohort |> 
   inner_join(static_features.raw, by='participant_id') |>
   filter(task_name=="prolonged-vowel")
@@ -705,7 +780,7 @@ stenosis.cohort.features <- airway.stenosis.cohort |>
 :::
 
 ::: {.fragment}
-```{r}
+```{r feature-matrix-colnames}
 stenosis.cohort.features %>% colnames()
 ```
 :::
@@ -715,7 +790,7 @@ stenosis.cohort.features %>% colnames()
 Let's take a look at our jitter/shimmer features: `local_jitter` and `local_shimmer`:
 
 
-```{r}
+```{r jitter-shimmer-summary-table}
 
 stenosis.cohort.features %>% 
   select(participant_id, age, sex_at_birth, status, local_jitter, local_shimmer) %>% 
@@ -815,7 +890,7 @@ Let's look at our jitter and shimmer features...
 
 ::: {.column width="50%" .fragment}
 
-```{r}
+```{r confounding-jitter-boxplot}
 # jitterLocal_sma3nz_amean, localDB_shimmer
 stenosis.cohort.features %>% 
   select(participant_id, status, sex_at_birth, local_jitter, local_shimmer) %>% 
@@ -829,7 +904,7 @@ stenosis.cohort.features %>%
 
 ::: {.column width="50%" .fragment}
 
-```{r}
+```{r confounding-shimmer-boxplot}
 stenosis.cohort.features %>% 
   select(participant_id, status, sex_at_birth, local_jitter, local_shimmer) %>% 
   ggplot(aes(x=status, y=local_shimmer, fill=sex_at_birth)) + geom_boxplot() +
@@ -862,18 +937,19 @@ We'll use the `recipe` package to...
 
 ::: {.fragment}
 
-```{r}
+```{r ml-design-matrix-recipe}
 stenosis.design.matrix <- stenosis.cohort.features %>% 
-  select(status, age, sex_at_birth, local_jitter, local_shimmer) %>% 
+  select(participant_id, status, age, sex_at_birth, local_jitter, local_shimmer) %>% 
   filter(!is.na(sex_at_birth)) # Exclude cases with missing sex, since it's a confounder and there aren't that many...
 
 preproc_recipe <- recipe(status ~ ., data = stenosis.design.matrix) %>% 
+  update_role(participant_id, new_role = "id") %>% # keep participant_id around for grouping, but it's not a predictor!
   step_center(all_numeric_predictors()) %>% # normalize so mean is zero
   step_scale(all_numeric_predictors()) %>% # scale s.t. SD is 1
   step_dummy(all_nominal_predictors())   # nominalize sex_at_birth
 stenosis.design.matrix <- prep(preproc_recipe) %>% bake(stenosis.design.matrix)
 ```
-```{r}
+```{r ml-design-matrix-display}
 stenosis.design.matrix
 ```
 
@@ -885,13 +961,16 @@ Now, compute a test/train split:
 
 ::: {.fragment}
 
-```{r, echo=TRUE}
+```{r ml-train-test-split, echo=TRUE}
 library(rsample)
 set.seed(42) # always set a seed!
 
-stenosis.matrix.split <- initial_split(stenosis.design.matrix, strata = status)
-stenosis.matrix.split.train <- training(stenosis.matrix.split)
-stenosis.matrix.split.test <- testing(stenosis.matrix.split)
+# Some participants have multiple recording sessions for this task - a plain
+# row-level split could put the same participant's sessions on both sides!
+# group_initial_split() keeps every row for a given participant together.
+stenosis.matrix.split <- group_initial_split(stenosis.design.matrix, group = participant_id, strata = status)
+stenosis.matrix.split.train <- training(stenosis.matrix.split) %>% select(-participant_id)
+stenosis.matrix.split.test <- testing(stenosis.matrix.split) %>% select(-participant_id)
 ```
 
 :::
@@ -909,7 +988,7 @@ Now, we will fit a model to predict case/control status using jitter, shimmer, s
 
 Always check to see what your random-chance MLE estimate ought to be, as a baseline:
 
-```{r, echo=TRUE}
+```{r ml-baseline-proportions, echo=TRUE}
 stenosis.matrix.split.train |> 
   group_by(status) |> tally() |> 
   mutate(prop=n/sum(n))
@@ -923,7 +1002,7 @@ Now, let's fit two models: GLM & Random Forest
 
 ### GLM
 
-```{r,warning=FALSE,message=FALSE}
+```{r ml-fit-glm, warning=FALSE, message=FALSE}
 library(tidymodels)
 library(parsnip)
 library(workflows)
@@ -966,18 +1045,8 @@ simple_glm_roc <- simple_glm_probs %>% roc_curve(status, .pred_case)
 
 
 
-```{r}
-simple_glm_probs$status
-simple_glm_probs %>% brier_class(.pred_case, truth=status, event_level="first")
 
-simple_glm_probs %>% ggplot(aes(x=.pred_case, y=.pred_control, color=status)) + geom_point(size=4, alpha=0.25)
-simple_glm_probs %>% arrange(-.pred_case) %>% 
-  mutate(n=seq(1:nrow(simple_glm_probs))) %>% ggplot(aes(y=.pred_case, x=n, fill=status)) + geom_col()
-
-```
-
-
-```{r}
+```{r ml-glm-conf-mat-auc}
 simple_glm_clf %>% conf_mat(status, .pred_class) %>% summary %>% 
   rbind(simple_glm_probs %>% roc_auc(status, .pred_case)) %>% 
   rbind(simple_glm_probs %>% pr_auc(status, .pred_case)) 
@@ -988,7 +1057,7 @@ simple_glm_clf %>% conf_mat(status, .pred_class) %>% summary %>%
 
 ::: {.column width="50%" .fragment}
 
-```{r}
+```{r ml-glm-roc-plot}
 autoplot(simple_glm_roc)
 ```
 
@@ -999,12 +1068,38 @@ autoplot(simple_glm_roc)
 
 ## Finally, Some ML! {.smaller}
 
+::: {.fragment}
+Does jitter/shimmer add anything _beyond_ age and sex?
+:::
+
+::: {.fragment}
+```{r ml-confounders-only-fit, echo=TRUE}
+confounders_only_glm <- glm_workflow %>% 
+  add_formula(status ~ age + sex_at_birth_Male) %>% 
+  fit(data = stenosis.matrix.split.train)
+
+confounders_only_probs <- predict(confounders_only_glm, stenosis.matrix.split.test, type = "prob") %>% 
+  bind_cols(stenosis.matrix.split.test)
+```
+:::
+
+::: {.fragment}
+```{r ml-confounders-vs-full-auc, echo=TRUE}
+bind_rows(
+  confounders_only_probs %>% roc_auc(status, .pred_case) %>% mutate(model = "Confounders only (age + sex)"),
+  simple_glm_probs %>% roc_auc(status, .pred_case) %>% mutate(model = "Full model (+ jitter/shimmer)")
+)
+```
+:::
+
+## Finally, Some ML! {.smaller}
+
 Now, let's fit two models: GLM & Random Forest
 
 ### Random Forest
 
 
-```{r}
+```{r ml-fit-rf}
 # RF
 
 simple_rf <- rf_workflow %>% add_formula(status ~ .) %>% 
@@ -1027,7 +1122,7 @@ simple_rf_roc <- simple_rf_probs %>% roc_curve(status, .pred_case)
 
 ::: {.column width="50%" .fragment}
 
-```{r}
+```{r ml-rf-conf-mat-auc}
 simple_rf_clf %>% conf_mat(status, .pred_class) %>% summary %>% 
   rbind(simple_rf_probs %>% roc_auc(status, .pred_case)) %>% 
 rbind(simple_rf_probs %>% pr_auc(status, .pred_case)) 
@@ -1040,7 +1135,7 @@ rbind(simple_rf_probs %>% pr_auc(status, .pred_case))
 
 ::: {.column width="50%" .fragment}
 
-```{r}
+```{r ml-rf-roc-plot}
 autoplot(simple_rf_roc)
 ```
 

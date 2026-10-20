@@ -8,10 +8,6 @@ website:
   search: false
   navbar:
     right:
-      - text: Challenges
-        href: index.qmd
-      - text: Dataset Resources
-        href: resources.qmd
       - text: Voice Biomarkers Overview
         href: overview.qmd
       - text: Walkthrough

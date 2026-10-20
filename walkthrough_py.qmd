@@ -18,11 +18,11 @@ from pathlib import Path
 random.seed(42)
 np.random.seed(42)
 
-PATH_TO_PHYSIONET_DOWNLOAD_DIR = Path("/Users/bedricks/Documents/b2ai_3.1/adult/")
+PATH_TO_PHYSIONET_DOWNLOAD_DIR = Path("/Users/bedricks/Documents/b2ai_4.0/adult/")
 PHENOTYPES_DIR = PATH_TO_PHYSIONET_DOWNLOAD_DIR / "phenotype"
 FEATURES_DIR   = PATH_TO_PHYSIONET_DOWNLOAD_DIR / "features"
 
-full_data_dictionary = pd.read_csv("bridge2ai_voice_project_data_dictionary.csv")
+full_data_dictionary = pd.read_csv("bridge2ai_voice_redcap_project_data_dictionary.csv")
 ```
 
 ## Plan for Today
@@ -93,7 +93,7 @@ print(f"Rows: {len(demographics)}")
 print(f"Columns: {demographics.shape[1]}")
 ```
 
-61 columns! What are in those columns?
+52 columns! What are in those columns?
 
 ```{python}
 #| echo: true
@@ -207,9 +207,16 @@ Features of interest: *jitter* / *shimmer*, on some TBD acoustic task
 
 ## Step 1: Who's in, who's out?
 
-*Airway stenosis* is part of the *Respiratory Disorders* protocol…
+There are two ways to identify clinical populations:
 
-To identify eligible participants, use `phenotype/enrollment/eligibility.tsv`:
+1. *Self-reported* diagnostic status
+2. *Clinically-validated* diagnostic status
+
+Starting with *self-reported* status…
+
+## Step 1: Who's in, who's out?
+
+Self-reported conditions live in `phenotype/enrollment/eligibility.tsv`:
 
 ```{python}
 #| echo: true
@@ -225,41 +232,42 @@ eligibility_table = pd.read_csv(
 This table contains two types of information:
 
 1. *Self-reported* information from participants about various disorders
-2. Columns indicating the participant's eligible protocols
+2. Information about the participant's status as a "control"
 
-Eligibility columns are slightly tricky!
-
-## Step 1: Who's in, who's out?
-
-Relevant CSV data dictionary field: `subjectparticipant_eligible_studies`
-
-> `1, Voice Disorders | 2, Neurological and Neurodegenerative Disorders | 3, Mood and Psychiatric Disorders | 4, Respiratory Disorders | age_2_4, Pediatric Disorders - Ages [2-4) | ...`
-
-These map to the `eligible_studies___1`, `eligible_studies___2`… fields in `eligibility.tsv`.
-
-For respiratory disorders, we want `eligible_studies___4` (as per `enrollment/eligibility.json`):
-
-```{python}
-#| echo: true
-resp_disorder_participants = eligibility_table[
-    eligibility_table["eligible_studies___4"].notna()
-].copy()
-print(f"Respiratory disorder participants: {len(resp_disorder_participants)}")
-```
-
-## Cases vs. Controls
-
-Of these participants, some are *cases* and some are *controls*.
-
-- *Cases*: Clinically-validated diagnosis of a relevant disorder
-- *Controls*: No (known) relevant diagnosis for this protocol
-
-Look for the `is_control_participant` column:
+Columns starting with `self_reported_*` indicate participant-level status:
 
 ```{python}
 #| echo: true
 (
-    resp_disorder_participants
+    eligibility_table
+    .groupby("self_reported_airway_stenosis", dropna=False)
+    .size()
+    .reset_index(name="n")
+)
+```
+
+Watch out for missing values!
+
+## Step 1: Who's in, who's out?
+
+Clinically-validated diagnoses live in *diagnosis-specific* tables, in `phenotype/diagnosis`.
+
+Each diagnosis table contains detailed and specific participant-level metadata…
+
+For example, participants with airway stenosis can be found in `phenotype/diagnosis/airway_stenosis.tsv`.
+
+We'll be talking more about diagnosis-specific tables in a minute…
+
+But first, let's talk about **controls**…
+
+## Cases vs. Controls
+
+One way to find controls: use the `is_control_participant` column:
+
+```{python}
+#| echo: true
+(
+    eligibility_table
     .groupby("is_control_participant", dropna=False)
     .size()
     .reset_index(name="n")
@@ -274,6 +282,28 @@ The notion of "control" is tricky with voice…
 - Somebody with *no* factors affecting their voice?
 - What does "normal" even mean?
 :::
+
+## Cases vs. Controls
+
+Even among `is_control_participant` participants, there is heterogeneity:
+
+```{python}
+#| echo: true
+(
+    eligibility_table
+    .query("is_control_participant == 'Yes'")
+    .filter(like="self_reported")
+    .melt(var_name="condition", value_name="response")
+    .groupby(["condition", "response"])
+    .size()
+    .reset_index(name="n")
+    .pivot(index="condition", columns="response", values="n")
+    .fillna(0)
+    .astype(int)
+)
+```
+
+Moving on…
 
 ## Cases vs. Controls
 
@@ -306,8 +336,8 @@ From `airway_stenosis.json`, the gold-standard field is `diagnosis_as_gold_stand
 
 Steps to build our cohort:
 
-1. **Cases**: merge `resp_disorder_participants` with the airway stenosis diagnosis table, then keep only `diagnosis_as_gold_standard_diagnosis == 'Yes'`
-2. **Controls**: `resp_disorder_participants` where `is_control_participant == 'Yes'`
+1. **Cases**: Participants in `airway_stenosis_dx`, filter `diagnosis_as_gold_standard_diagnosis == 'Yes'`
+2. **Controls**: `eligibility_table` where `is_control_participant == 'Yes'`
 3. Pick relevant columns (or make new ones!)
 4. Combine
 
@@ -316,15 +346,15 @@ Steps to build our cohort:
 
 # Step 1: Cases
 airway_stenosis_cases = (
-    resp_disorder_participants
-    .merge(airway_stenosis_dx, on="participant_id")
+    airway_stenosis_dx
     .query("diagnosis_as_gold_standard_diagnosis == 'Yes'")
 )
 
 # Step 2: Controls
 airway_stenosis_controls = (
-    resp_disorder_participants
+    eligibility_table
     .query("is_control_participant == 'Yes'")
+    .query("self_reported_airway_stenosis == 'Unchecked'")  # belt-and-suspenders
 )
 
 # Step 3: Tidy
@@ -348,6 +378,10 @@ airway_stenosis_cohort.groupby("status").size().reset_index(name="n")
 ```
 
 Now we've got a cohort!
+
+## Warning: This is oversimplified
+
+In a real analysis, your definition of "control" would need to be more clinically-grounded…
 
 ## Step 5: More Sanity Checking
 
@@ -397,6 +431,21 @@ plt.show()
 ```
 
 What do we notice about our cohort?
+
+## Final Cleanup
+
+For *this* analysis, we will exclude participants where `sex_at_birth` is `"Unknown"`:
+
+```{python}
+#| echo: true
+
+airway_stenosis_cohort = (
+    airway_stenosis_cohort
+    .merge(demographics, on="participant_id")
+    .query("sex_at_birth != 'Unknown'")
+    [["participant_id", "status", "age", "sex_at_birth"]]  # keep a few demographics around
+)
+```
 
 # Assembling Features
 
@@ -466,7 +515,6 @@ A simple `merge` + `filter` will do the trick:
 
 stenosis_cohort_features = (
     airway_stenosis_cohort
-    .merge(demographics, on="participant_id")
     .merge(static_features_raw, on="participant_id")
     .query("task_name == 'prolonged-vowel'")
 )

@@ -1,7 +1,6 @@
----
-title: "Dataset Resources"
-format: html
----
+# Bridge2AI Face-to-Face Materials
+
+This site is hosted [here](https://dmice.ohsu.edu/bedricks/b2ai_f2f_oct_2026/)
 
 - [Dataset Documentation](https://docs.b2ai-voice.org/)
   - Description of protocol, data use restrictions, study metadata, etc.
@@ -18,15 +17,5 @@ format: html
   - The data dictionary in [CSV](https://github.com/eipm/bridge2ai-redcap/blob/main/data/bridge2ai_voice_project_data_dictionary.csv) format (an XML version also exists on Github, if that's more your jam)
 - [FHIR Schema](https://kind-lab.github.io/vbai-fhir/toc.html)
   - Machine-readable metadata schema, for those of us who are into that sort of thing. 🤓
+- [b2aiprep](https://github.com/sensein/b2aiprep) library: The Python library that performs the data processing of the raw audio to produce the dataset (feature extraction, etc.)
 - [FAQ About LLM Usage](https://usf.app.box.com/s/6w7iclfnryj81u2lo4wc3brs6cjj8d7g)
-  
-## Dataset "Gotchas"
-
-There are a few known tricky aspects to the dataset; some are artifacts of the data collection process, others are the result of minor issues in our ETL process.
-
-### Data Dictionary Naming Quirks
-
-There are a few fields that are named slightly differently between the [CSV data dictionary](https://github.com/eipm/bridge2ai-redcap/blob/main/data/bridge2ai_voice_project_data_dictionary.csv) and the released TSV files on PhysioNet.
-Some (most?) of the "gold-standard diagnosis" columns use a `_gsd` suffix in the CSV data dictionary, but in the corresponding TSV file (and accompanying JSON data dictionary) use a `_gold_standard_diagnosis` suffix.
-
-For example, the CSV lists a column in the airway stenosis diagnosis file named `diagnosis_as_gsd`, but in the file itself it is named `diagnosis_as_gold_standard_diagnosis`.

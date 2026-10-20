@@ -1,39 +1,48 @@
 ---
-title: "Bridge2AI-Voice Resources"
-format: 
-  html:
-    anchor-sections: true
-toc: true
+title: "Bridge2AI-Voice Dataset Resources"
+format: html
 ---
 
-## Challenge 1: Voice Across the Lifespan
+- [Dataset Documentation](https://docs.b2ai-voice.org/)
+  - Description of protocol, data use restrictions, study metadata, etc.
+- The Datasets!
+  - See these [logistical notes](accessing_data.qmd)
+  - [Bridge2AI-Voice Adult dataset download](https://physionet.org/content/b2ai-voice/)
+    - Shorter and more focused overview, including brief code example.
+    - Download the full dataset, get the DOI for citing, etc.
+    - [Dataset dashboard](https://b2ai-voice.org/bridge2ai-voice-dataset/adult-dashboard/)
+  - [Bridge2AI-Voice Pediatric dataset download](https://physionet.org/content/b2ai-voice-pediatric)
+    - [Dataset dashboard](https://b2ai-voice.org/bridge2ai-voice-dataset/pediatric-dashboard/)
+- [RedCap Data Dictionary](https://github.com/eipm/bridge2ai-redcap)
+  - Exhaustive description of all fields, examples of questionnaires, links to acoustic stimuli, map of protocols to questionnaires/acoustic tasks, etc., for both the adult and pediatric protocols.
+  - The data dictionary in [CSV](https://github.com/eipm/bridge2ai-redcap/blob/main/data/bridge2ai_voice_project_data_dictionary.csv) format (an XML version also exists on Github, if that's more your jam)
+- [FHIR Schema](https://kind-lab.github.io/vbai-fhir/toc.html)
+  - Machine-readable metadata schema, for those of us who are into that sort of thing. 🤓
+- [b2aiprep](https://github.com/sensein/b2aiprep) library: The Python library that performs the data processing of the raw audio to produce the dataset (feature extraction, etc.)
+- [FAQ About LLM Usage](https://usf.app.box.com/s/6w7iclfnryj81u2lo4wc3brs6cjj8d7g)
+  
+## Dataset "Gotchas"
 
-As we age, our voices change: first at puberty, and then through adulthood. This has several implications for the clinical use of voice biomarkers:
+There are a few known tricky aspects to the dataset; some are artifacts of the data collection process, others are the result of minor issues in our ETL process.
 
-- Models trained on adult voices may not work as well when run against those of children
-- Longitudinal data within a single patient’s voice may confound the signal of a particular disorder
-- During periods of rapid voice change (adolescence, gender transition, etc.), a patient’s age by itself may not be a reliable yardstick for choosing between a pediatric and adult model.
+### Data Dictionary Naming Quirks
 
-Our dataset is unique in that it includes a significant number of both pediatric and adult subjects, making this a perfect opportunity to dig in to this under-studied area!
+There are a few fields that are named slightly differently between the [CSV data dictionary](https://raw.githubusercontent.com/eipm/bridge2ai-redcap/refs/heads/main/data/bridge2ai_voice_redcap_project_data_dictionary.csv) and the released TSV files on PhysioNet.
+Some (most?) of the "gold-standard diagnosis" columns use a `_gsd` suffix in the CSV data dictionary, but in the corresponding TSV file (and accompanying JSON data dictionary) use a `_gold_standard_diagnosis` suffix.
 
-Ideas:
+For example, the CSV lists a column in the airway stenosis diagnosis file named `diagnosis_as_gsd`, but in the file itself it is named `diagnosis_as_gold_standard_diagnosis`.
 
-- Quantify which features are most stable between pediatric and adult voices
-- Look at the same disorder/attribute in adult and pediatric patients, and identify relevant
-- Look for tasks that are maximally stable across age groups for a given condition and conditions
-- Focus on an age range of interest: early childhood through adolescence? 
+### Demographics are per-session, not per-participant
 
+The rows in `demographics.tsv` are not per-participant, they are per-session. 
+This means that the same participant_id may have multiple rows in `demographics.tsv`, and the data across sessions are not always consistent.
+Subjects sometimes respond to demographic questions differently over time, and Federal policies around the collection and handling of demographic data have evolved over the course of the study.
 
+#### Sex-at-birth Consistency
 
-## Challenge 2: Differential Diagnosis
+`sex_at_birth` is a computed field, derived from several different sources in our original as-collected dataset.
+It is computed on a per-session basis, and as such there are a handful of participants for whom their `sex_at_birth` label is inconsistent across sessions.
+Make sure to take this into account when using this field; one option is to use their _earliest_ value (as determined via `demographics_session_id`), which corresponds to their response at the time of enrollment. 
+Another is to use the _latest_ value, which represents our current best understanding.
 
-- Many disorders share acoustic signatures; can you identify disorders that “sound” the most similar, and then figure out how to differentiate them?
-- Relatedly, some disorders that are clinically hard to distinguish from one another have acoustic signatures that could help in differentiation (e.g. benign vs. malignant vocal fold nodules).
-- Work with clinical partners to learn more about what might be clinically hard to diaganose, don’t just guess from the data!
-
-
-## Challenge 3: Synthetic Data
-
-- Sharing sensitive information is subject to many different regulations around the world.
-- Can you build a corresponding synthetic dataset that is comparable to the original dataset from a statistical perspective?
-- This means that individual, joint, and conditional distributions of features would be similar without any row of data being identical or proximal to the original dataset.
+Similar things are the case for race and ethnicity, for similar reasons.

@@ -1,0 +1,12 @@
+*.Rproj
+.Rproj.user/
+.Rhistory
+uv.lock
+.venv/
+.python-version
+.quarto/
+*_files/
+_site/
+/.quarto/
+**/*.quarto_ipynb
+.DS_Store
