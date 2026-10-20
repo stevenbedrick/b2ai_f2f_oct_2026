@@ -1,0 +1,20 @@
+---
+title: "Accessing Data"
+format: html
+---
+
+To access the datasets, you must...
+
+1. Sign up for a [PhysioNet](https://physionet.org) account
+2. Complete the credentialing process
+3. Sign a DUA (once per dataset)
+    - [Adult Dataset](https://physionet.org/content/b2ai-voice)
+    - [Pediatric Dataset](https://physionet.org/content/b2ai-voice-pediatric)
+  
+The first step is easy and instantaneous, but the second step takes a bit of time. On the day of the event, we _will_ be able to approve your access. 
+In the credentialing form, you will be asked for a "reference"; use Steven Bedrick (`bedricks@ohsu.edu`) as your reference, and mention "Bridge2AI F2F" in the field asking for a description of your project.
+
+Once your credentials have been granted, you will be able tocan then download the dataset, but note that it is quite large and so downloading it ahead of time is recommended.
+Additionally we recommend using PhysioNet's AWS integration to download the file, rather than HTTP.
+
+We have USB drives available pre-loaded with the dataset to facilitate this process; before we can share the data with you, however, you _must_ complete the PhysioNet credentialing and DUA processes.

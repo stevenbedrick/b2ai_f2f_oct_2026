@@ -1,0 +1,39 @@
+---
+title: "Bridge2AI-Voice Resources"
+format: 
+  html:
+    anchor-sections: true
+toc: true
+---
+
+## Challenge 1: Voice Across the Lifespan
+
+As we age, our voices change: first at puberty, and then through adulthood. This has several implications for the clinical use of voice biomarkers:
+
+- Models trained on adult voices may not work as well when run against those of children
+- Longitudinal data within a single patient’s voice may confound the signal of a particular disorder
+- During periods of rapid voice change (adolescence, gender transition, etc.), a patient’s age by itself may not be a reliable yardstick for choosing between a pediatric and adult model.
+
+Our dataset is unique in that it includes a significant number of both pediatric and adult subjects, making this a perfect opportunity to dig in to this under-studied area!
+
+Ideas:
+
+- Quantify which features are most stable between pediatric and adult voices
+- Look at the same disorder/attribute in adult and pediatric patients, and identify relevant
+- Look for tasks that are maximally stable across age groups for a given condition and conditions
+- Focus on an age range of interest: early childhood through adolescence? 
+
+
+
+## Challenge 2: Differential Diagnosis
+
+- Many disorders share acoustic signatures; can you identify disorders that “sound” the most similar, and then figure out how to differentiate them?
+- Relatedly, some disorders that are clinically hard to distinguish from one another have acoustic signatures that could help in differentiation (e.g. benign vs. malignant vocal fold nodules).
+- Work with clinical partners to learn more about what might be clinically hard to diaganose, don’t just guess from the data!
+
+
+## Challenge 3: Synthetic Data
+
+- Sharing sensitive information is subject to many different regulations around the world.
+- Can you build a corresponding synthetic dataset that is comparable to the original dataset from a statistical perspective?
+- This means that individual, joint, and conditional distributions of features would be similar without any row of data being identical or proximal to the original dataset.

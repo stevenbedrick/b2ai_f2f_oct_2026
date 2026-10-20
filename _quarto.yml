@@ -1,0 +1,30 @@
+project:
+  type: website
+  render:
+    - "*.qmd"
+    - "!walkthrough.qmd"
+website:
+  title: "2026 Bridge2AI F2F"
+  search: false
+  navbar:
+    right:
+      - text: Challenges
+        href: index.qmd
+      - text: Dataset Resources
+        href: resources.qmd
+      - text: Voice Biomarkers Overview
+        href: overview.qmd
+      - text: Walkthrough
+        menu:
+          - text: Walkthrough (R)
+            href: walkthrough_wrapper.qmd
+          - text: Walkthrough (🐍)
+            href: walkthrough_py.qmd
+      #   href: walkthrough_wrapper.qmd
+      # - text: Python
+      #   href: walkthrough_py.qmd
+
+
+format:
+  html:
+    theme: cosmo
