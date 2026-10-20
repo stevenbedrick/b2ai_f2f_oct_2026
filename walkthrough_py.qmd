@@ -1,0 +1,715 @@
+---
+title: "Bridge2AI Dataset Example — 🐍"
+format:
+  html:
+    toc: true
+---
+
+```{python}
+#| include: false
+import random
+import numpy as np
+import pandas as pd
+import matplotlib.pyplot as plt
+import matplotlib.ticker as mticker
+import seaborn as sns
+from pathlib import Path
+
+random.seed(42)
+np.random.seed(42)
+
+PATH_TO_PHYSIONET_DOWNLOAD_DIR = Path("/Users/bedricks/Documents/b2ai_3.1/adult/")
+PHENOTYPES_DIR = PATH_TO_PHYSIONET_DOWNLOAD_DIR / "phenotype"
+FEATURES_DIR   = PATH_TO_PHYSIONET_DOWNLOAD_DIR / "features"
+
+full_data_dictionary = pd.read_csv("bridge2ai_voice_project_data_dictionary.csv")
+```
+
+## Plan for Today
+
+1. Loading the dataset
+2. Navigating around
+3. Identifying a cohort
+4. Assembling features
+5. A simple analysis
+6. Your turn!
+
+## Loading the dataset
+
+Two primary sets of files:
+
+- `phenotype/`
+  - Participant-level information, including all RedCap-stored responses from questionnaire and acoustic tasks
+  - Separate TSV files for individual tasks, enrollment forms, etc.
+- `features/`
+  - Audio features *computed* from recordings of acoustic tasks
+  - `static_features.tsv`:
+    - F0, loudness, etc.
+  - Other files (Parquet)
+    - MFCC Spectrograms
+    - Frame-level data (e.g. pitch contours) for tasks
+
+## Ingestion
+
+![](figures/screenshots/directory_layout.png)
+
+## Ingestion
+
+Begin by reading in the demographics file and cleaning the `age` column.
+The `age` column is *mostly* numeric, but participants aged 90 or older are coded
+as the string `"90 and above"` — we'll replace those with `NaN`.
+
+```{python}
+#| echo: true
+#| message: false
+#| warning: false
+
+def clean_age_col(df: pd.DataFrame, default_age_val=np.nan) -> pd.DataFrame:
+    """Replace the '90 and above' age sentinel with a numeric value (default NaN)."""
+    df = df.copy()
+    df["age"] = pd.to_numeric(
+        df["age"].replace("90 and above", default_age_val),
+        errors="coerce"
+    )
+    return df
+
+demographics = pd.read_csv(
+    PHENOTYPES_DIR / "demographics" / "demographics.tsv",
+    sep="\t",
+    dtype={"participant_id": str},
+)
+demographics = clean_age_col(demographics)
+```
+
+What did we get?
+
+```{python}
+#| echo: true
+print(f"Rows: {len(demographics)}")
+```
+
+```{python}
+#| echo: true
+print(f"Columns: {demographics.shape[1]}")
+```
+
+61 columns! What are in those columns?
+
+```{python}
+#| echo: true
+print(demographics.columns.to_list())
+```
+
+## Orientation
+
+"How do I know what the columns mean?"
+
+The columns in the phenotype TSV files correspond to entries in the RedCap-derived data dictionary!
+
+1. File-level data dictionaries (`demographics.json`)
+2. Omnibus [CSV data dictionary](https://github.com/eipm/bridge2ai-redcap/blob/main/data/bridge2ai_voice_project_data_dictionary.csv)
+
+Hint: Look for fields whose `Form Name` is `q_generic_demographics`
+
+```{python}
+#| echo: true
+(
+    full_data_dictionary
+    .query("`Form Name` == 'q_generic_demographics'")
+    [["Variable / Field Name", "Field Label"]]
+    .sample(10, random_state=42)
+)
+```
+
+## Orientation
+
+![](figures/screenshots/data_dictionary_screenshot.png)
+
+## Orientation
+
+```json
+{
+  "participant_id": {
+    "description": "A unique identifier for the participant.",
+    "valueType": ["xsd:string"]
+  },
+  "children": {
+    "description": "Indicates whether the participant has one or more children (response: yes/no).",
+    "question": { "en": "One or more children" },
+    "datatype": ["xsd:integer"],
+    "choices": [
+      { "name": { "en": "Yes" }, "value": 1 },
+      { "name": { "en": "No" },  "value": 0 }
+    ],
+    ...
+  }
+}
+```
+
+## Data Tidying
+
+A few data tidying gotchas to consider:
+
+- The `age` column is *generally* numeric, but a handful of participants are coded `90 and above`
+- Boolean fields (e.g. `children`) are coded as character strings (`"True"` / `"False"`)
+- Some Boolean-"ish" fields also have e.g. "Prefer Not to Answer" options
+
+Bottom line: *always check the data dictionary*!
+
+Other things to think about:
+
+- Demographic fields — how are they coded?
+- Protocol-specific tidying
+
+## Meet Our Participants
+
+```{python}
+#| echo: true
+#| message: false
+#| warning: false
+
+demo_summary = (
+    demographics[["participant_id", "sex_at_birth", "age"]]
+    .drop_duplicates()
+    .copy()
+)
+demo_summary["sex_at_birth"] = demo_summary["sex_at_birth"].fillna("Unknown")
+
+age_stats = (
+    demo_summary
+    .groupby("sex_at_birth")["age"]
+    .agg(
+        N="count",
+        Median=lambda x: round(x.median(), 1),
+        Mean=lambda x: round(x.mean(), 1),
+        SD=lambda x: round(x.std(), 1),
+    )
+    .reset_index()
+)
+age_stats
+```
+
+Other phenotype files worth exploring:
+
+- `phenotype/confounders/confounders.tsv` — smoking history, certain medications, etc.
+- `phenotype/diagnosis/*` — relevant information about specific diagnoses
+- `phenotype/questionnaire/*` — responses to questionnaires (GAD-7, Leicester Cough Questionnaire, etc.)
+
+# Identifying a Cohort
+
+## Our goal:
+
+### RQ: How do *jitter* and *shimmer* differ in patients with airway stenosis, as compared to controls?
+
+Comparison of interest: Airway stenosis vs. control population
+
+Features of interest: *jitter* / *shimmer*, on some TBD acoustic task
+
+## Step 1: Who's in, who's out?
+
+*Airway stenosis* is part of the *Respiratory Disorders* protocol…
+
+To identify eligible participants, use `phenotype/enrollment/eligibility.tsv`:
+
+```{python}
+#| echo: true
+#| message: false
+
+eligibility_table = pd.read_csv(
+    PHENOTYPES_DIR / "enrollment" / "eligibility.tsv",
+    sep="\t",
+    dtype={"participant_id": str},
+)
+```
+
+This table contains two types of information:
+
+1. *Self-reported* information from participants about various disorders
+2. Columns indicating the participant's eligible protocols
+
+Eligibility columns are slightly tricky!
+
+## Step 1: Who's in, who's out?
+
+Relevant CSV data dictionary field: `subjectparticipant_eligible_studies`
+
+> `1, Voice Disorders | 2, Neurological and Neurodegenerative Disorders | 3, Mood and Psychiatric Disorders | 4, Respiratory Disorders | age_2_4, Pediatric Disorders - Ages [2-4) | ...`
+
+These map to the `eligible_studies___1`, `eligible_studies___2`… fields in `eligibility.tsv`.
+
+For respiratory disorders, we want `eligible_studies___4` (as per `enrollment/eligibility.json`):
+
+```{python}
+#| echo: true
+resp_disorder_participants = eligibility_table[
+    eligibility_table["eligible_studies___4"].notna()
+].copy()
+print(f"Respiratory disorder participants: {len(resp_disorder_participants)}")
+```
+
+## Cases vs. Controls
+
+Of these participants, some are *cases* and some are *controls*.
+
+- *Cases*: Clinically-validated diagnosis of a relevant disorder
+- *Controls*: No (known) relevant diagnosis for this protocol
+
+Look for the `is_control_participant` column:
+
+```{python}
+#| echo: true
+(
+    resp_disorder_participants
+    .groupby("is_control_participant", dropna=False)
+    .size()
+    .reset_index(name="n")
+)
+```
+
+::: {.callout-caution}
+The notion of "control" is tricky with voice…
+
+- Somebody who doesn't have condition *X*?
+- Somebody with *no* respiratory disorders at all?
+- Somebody with *no* factors affecting their voice?
+- What does "normal" even mean?
+:::
+
+## Cases vs. Controls
+
+Diagnoses each have separate TSVs — let's load the airway stenosis one:
+
+```{python}
+#| echo: true
+#| message: false
+
+airway_stenosis_dx = pd.read_csv(
+    PHENOTYPES_DIR / "diagnosis" / "airway_stenosis.tsv",
+    sep="\t",
+    dtype={"participant_id": str},
+)
+print(airway_stenosis_dx.shape)
+airway_stenosis_dx.dtypes
+```
+
+From `airway_stenosis.json`, the gold-standard field is `diagnosis_as_gold_standard_diagnosis`:
+
+```json
+"diagnosis_as_gold_standard_diagnosis": {
+  "description": "Indicates whether the participant has airway stenosis confirmed by
+                  laryngoscopy, bronchoscopy, or CT imaging (Yes/No).",
+  ...
+}
+```
+
+## Cases vs. Controls
+
+Steps to build our cohort:
+
+1. **Cases**: merge `resp_disorder_participants` with the airway stenosis diagnosis table, then keep only `diagnosis_as_gold_standard_diagnosis == 'Yes'`
+2. **Controls**: `resp_disorder_participants` where `is_control_participant == 'Yes'`
+3. Pick relevant columns (or make new ones!)
+4. Combine
+
+```{python}
+#| echo: true
+
+# Step 1: Cases
+airway_stenosis_cases = (
+    resp_disorder_participants
+    .merge(airway_stenosis_dx, on="participant_id")
+    .query("diagnosis_as_gold_standard_diagnosis == 'Yes'")
+)
+
+# Step 2: Controls
+airway_stenosis_controls = (
+    resp_disorder_participants
+    .query("is_control_participant == 'Yes'")
+)
+
+# Step 3: Tidy
+airway_stenosis_cases = (
+    airway_stenosis_cases[["participant_id"]]
+    .assign(status="case")
+)
+airway_stenosis_controls = (
+    airway_stenosis_controls[["participant_id"]]
+    .assign(status="control")
+)
+
+# Step 4: Combine
+airway_stenosis_cohort = pd.concat(
+    [airway_stenosis_cases, airway_stenosis_controls],
+    ignore_index=True,
+)
+
+# Sanity check
+airway_stenosis_cohort.groupby("status").size().reset_index(name="n")
+```
+
+Now we've got a cohort!
+
+## Step 5: More Sanity Checking
+
+Let's do some quick EDA with our new cohort:
+
+```{python}
+#| echo: true
+#| warning: false
+#| message: false
+
+stenosis_for_eda = (
+    airway_stenosis_cohort
+    .merge(demographics, on="participant_id")
+    [["participant_id", "status", "age", "sex_at_birth"]]
+    .drop_duplicates()
+)
+
+# Summary table
+stenosis_for_eda.groupby("status")["age"].agg(
+    N="count",
+    Median=lambda x: round(x.median(), 1),
+    Mean=lambda x: round(x.mean(), 1),
+    SD=lambda x: round(x.std(), 1),
+).reset_index()
+```
+
+```{python}
+#| warning: false
+fig, ax = plt.subplots(figsize=(6, 4))
+sns.boxplot(
+    data=stenosis_for_eda,
+    x="status", y="age", hue="sex_at_birth",
+    ax=ax, width=0.5,
+)
+sns.stripplot(
+    data=stenosis_for_eda,
+    x="status", y="age", hue="sex_at_birth",
+    dodge=True, alpha=0.25, ax=ax,
+    legend=False,
+)
+ax.set_title("Age by status and sex at birth")
+ax.set_xlabel("Status")
+ax.set_ylabel("Age")
+sns.despine()
+plt.tight_layout()
+plt.show()
+```
+
+What do we notice about our cohort?
+
+# Assembling Features
+
+## What features do we have?
+
+The `static_features` dataframe contains *acoustic features* computed from the various stimuli/tasks…
+
+- Pitch-related (e.g. F0) — mean, plus other related stats
+- Spectral features (e.g. jitter, shimmer)
+- Loudness
+- MFCCs (mean / std. dev)
+- ASR-generated transcription*
+- Etc.
+
+## Returning to our RQ…
+
+We need to identify an acoustic task of interest. Let's look at what's available:
+
+```{python}
+#| echo: true
+#| message: false
+#| warning: false
+
+static_features_raw = pd.read_csv(
+    FEATURES_DIR / "static_features.tsv",
+    sep="\t",
+    dtype={"participant_id": str},
+)
+
+# Which tasks are represented in our cohort?
+(
+    airway_stenosis_cohort
+    .merge(static_features_raw, on="participant_id")
+    [["participant_id", "status", "task_name"]]
+    .groupby(["status", "task_name"])
+    .size()
+    .reset_index(name="n")
+    .pivot(index="task_name", columns="status", values="n")
+    .fillna(0)
+    .astype(int)
+)
+```
+
+::: {.callout-note}
+This method is not accounting for subjects with repeated sessions!
+:::
+
+## Which task?
+
+```{python}
+print(static_features_raw["task_name"].unique().tolist())
+```
+
+Let's pick the **"Prolonged Vowel"** acoustic task.
+
+> Hold a vowel sound (ɑ, as in "hot") for eight seconds…
+
+# Putting it All Together
+
+## Assembling our Feature Matrix
+
+A simple `merge` + `filter` will do the trick:
+
+```{python}
+#| echo: true
+#| warning: false
+
+stenosis_cohort_features = (
+    airway_stenosis_cohort
+    .merge(demographics, on="participant_id")
+    .merge(static_features_raw, on="participant_id")
+    .query("task_name == 'prolonged-vowel'")
+)
+
+print(stenosis_cohort_features.columns.tolist())
+```
+
+## Sanity-checking and EDA
+
+Let's take a look at our jitter/shimmer features: `local_jitter` and `local_shimmer`:
+
+```{python}
+(
+    stenosis_cohort_features
+    .groupby("status")[["local_jitter", "local_shimmer"]]
+    .agg(["count", "median", "mean", "std"])
+    .round(4)
+)
+```
+
+This shows some face validity for using these features…
+
+## A Quick Aside About Confounding
+
+The core premise of a voice biomarker looks something like this:
+
+![](figures/Fig.1.png)
+
+However, there are lots of things that can affect voice acoustics:
+
+![](figures/Fig.2.png)
+
+Sometimes, these same factors *also* affect our exposures — a classic case of confounding!
+
+![](figures/Fig.3.png)
+
+::: {.callout-warning}
+This is a very common source of problems with voice biomarkers!
+:::
+
+## Sanity-checking and EDA
+
+Let's see if we have this problem in *our* cohort:
+
+```{python}
+#| warning: false
+
+fig, axes = plt.subplots(1, 2, figsize=(10, 4))
+
+for ax, feature, title in zip(
+    axes,
+    ["local_jitter", "local_shimmer"],
+    ["Jitter", "Shimmer"],
+):
+    plot_df = (
+        stenosis_cohort_features
+        [["participant_id", "status", "sex_at_birth", feature]]
+        .dropna(subset=["sex_at_birth"])
+    )
+    sns.boxplot(data=plot_df, x="status", y=feature, hue="sex_at_birth", ax=ax, width=0.5)
+    sns.stripplot(
+        data=plot_df, x="status", y=feature, hue="sex_at_birth",
+        dodge=True, alpha=0.25, ax=ax, legend=False,
+    )
+    ax.set_title(title)
+    ax.set_xlabel("Status")
+    ax.set_ylabel(feature)
+
+sns.despine()
+plt.tight_layout()
+plt.show()
+```
+
+Looks like we'll definitely want to account for sex in our modeling!
+
+## Finally, Some ML!
+
+We'll use `sklearn`'s `Pipeline` + `ColumnTransformer` to:
+
+- Center & scale numeric features
+- One-hot-encode nominal features (i.e. `sex_at_birth`)
+
+```{python}
+#| echo: true
+
+from sklearn.pipeline import Pipeline
+from sklearn.preprocessing import StandardScaler, OneHotEncoder
+from sklearn.impute import SimpleImputer
+from sklearn.compose import ColumnTransformer
+from sklearn.model_selection import train_test_split
+from sklearn.linear_model import LogisticRegression
+from sklearn.ensemble import RandomForestClassifier
+from sklearn.metrics import (
+    classification_report, confusion_matrix,
+    roc_curve, roc_auc_score,
+    precision_recall_curve, average_precision_score,
+    ConfusionMatrixDisplay, RocCurveDisplay,
+)
+
+# --- Build design matrix ---
+design_matrix = (
+    stenosis_cohort_features
+    [["status", "age", "sex_at_birth", "local_jitter", "local_shimmer"]]
+    .dropna(subset=["sex_at_birth"])   # exclude cases with missing sex
+    .dropna(subset=["age", "local_jitter", "local_shimmer"])  # drop rows with missing features
+    .copy()
+)
+
+X = design_matrix.drop(columns="status")
+y = design_matrix["status"]
+
+numeric_features = ["age", "local_jitter", "local_shimmer"]
+categorical_features = ["sex_at_birth"]
+
+preprocessor = ColumnTransformer(
+    transformers=[
+        ("num", Pipeline([
+            ("imputer", SimpleImputer(strategy="median")),
+            ("scaler", StandardScaler()),
+        ]), numeric_features),
+        ("cat", OneHotEncoder(drop="first", sparse_output=False), categorical_features),
+    ]
+)
+
+design_matrix
+```
+
+## Finally, Some ML!
+
+Now, compute a test/train split:
+
+```{python}
+#| echo: true
+
+np.random.seed(42)
+
+X_train, X_test, y_train, y_test = train_test_split(
+    X, y,
+    test_size=0.25,
+    stratify=y,   # mirrors rsample's strata= argument
+    random_state=42,
+)
+```
+
+Always check your random-chance MLE baseline first:
+
+```{python}
+#| echo: true
+baseline = y_train.value_counts(normalize=True).reset_index()
+baseline.columns = ["status", "prop"]
+print(baseline)
+```
+
+## Finally, Some ML! — Logistic Regression
+
+```{python}
+#| echo: true
+#| warning: false
+
+glm_pipeline = Pipeline([
+    ("preprocessor", preprocessor),
+    ("classifier", LogisticRegression(max_iter=1000, random_state=42)),
+])
+
+glm_pipeline.fit(X_train, y_train)
+
+y_pred_glm       = glm_pipeline.predict(X_test)
+y_proba_glm      = glm_pipeline.predict_proba(X_test)
+
+# sklearn orders classes alphabetically: [case, control]
+class_labels     = glm_pipeline.classes_
+case_idx         = list(class_labels).index("case")
+y_score_glm_case = y_proba_glm[:, case_idx]
+
+print(classification_report(y_test, y_pred_glm, target_names=class_labels))
+```
+
+```{python}
+fig, axes = plt.subplots(1, 2, figsize=(10, 4))
+
+# Confusion matrix
+ConfusionMatrixDisplay.from_predictions(
+    y_test, y_pred_glm, display_labels=class_labels, ax=axes[0]
+)
+axes[0].set_title("Logistic Regression — Confusion Matrix")
+
+# ROC curve
+RocCurveDisplay.from_predictions(
+    (y_test == "case").astype(int),
+    y_score_glm_case,
+    name=f"LR (AUC = {roc_auc_score((y_test == 'case').astype(int), y_score_glm_case):.2f})",
+    ax=axes[1],
+)
+axes[1].set_title("Logistic Regression — ROC Curve")
+axes[1].plot([0, 1], [0, 1], "k--", lw=1)
+
+plt.tight_layout()
+plt.show()
+```
+
+## Finally, Some ML! — Random Forest
+
+```{python}
+#| echo: true
+
+rf_pipeline = Pipeline([
+    ("preprocessor", preprocessor),
+    ("classifier", RandomForestClassifier(n_estimators=75, random_state=42)),
+])
+
+rf_pipeline.fit(X_train, y_train)
+
+y_pred_rf       = rf_pipeline.predict(X_test)
+y_proba_rf      = rf_pipeline.predict_proba(X_test)
+y_score_rf_case = y_proba_rf[:, case_idx]
+
+print(classification_report(y_test, y_pred_rf, target_names=class_labels))
+```
+
+```{python}
+fig, axes = plt.subplots(1, 2, figsize=(10, 4))
+
+# Confusion matrix
+ConfusionMatrixDisplay.from_predictions(
+    y_test, y_pred_rf, display_labels=class_labels, ax=axes[0]
+)
+axes[0].set_title("Random Forest — Confusion Matrix")
+
+# ROC curve
+RocCurveDisplay.from_predictions(
+    (y_test == "case").astype(int),
+    y_score_rf_case,
+    name=f"RF (AUC = {roc_auc_score((y_test == 'case').astype(int), y_score_rf_case):.2f})",
+    ax=axes[1],
+)
+axes[1].set_title("Random Forest — ROC Curve")
+axes[1].plot([0, 1], [0, 1], "k--", lw=1)
+
+plt.tight_layout()
+plt.show()
+```
+
+# Your turn!
+
+
+The code for this walkthrough [is on Github](https://github.com/stevenbedrick/b2ai_f2f_oct_2026/blob/main/walkthrough_py.qmd) as a reference!
